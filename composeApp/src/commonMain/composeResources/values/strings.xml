@@ -565,6 +565,16 @@
     <string name="settings_advanced_sentry_reports_subtitle_desktop">Send crash reports with safe diagnostic context. On by default.</string>
     <string name="settings_advanced_discord_rich_presence">Discord Rich Presence</string>
     <string name="settings_advanced_discord_rich_presence_description">Show what you're browsing or watching on your Discord profile. Off by default.</string>
+    <string name="settings_advanced_discord_buttons">Show action buttons</string>
+    <string name="settings_advanced_discord_buttons_description">Add IMDb and Nuvio links to your presence card.</string>
+    <string name="settings_advanced_discord_browsing">Show browsing activity</string>
+    <string name="settings_advanced_discord_browsing_description">Report activity outside the player, such as the tab or title you are viewing.</string>
+    <string name="settings_advanced_discord_hide_paused">Hide while paused</string>
+    <string name="settings_advanced_discord_hide_paused_description">Clear your presence when playback is paused instead of showing a paused card.</string>
+    <string name="settings_advanced_discord_small_image">Show play/pause badge</string>
+    <string name="settings_advanced_discord_small_image_description">Overlay a small play or pause icon on the poster.</string>
+    <string name="settings_advanced_discord_swap_title">Swap title and subtitle</string>
+    <string name="settings_advanced_discord_swap_title_description">Put the episode name on the headline and the show name underneath.</string>
     <string name="sentry_enable_dialog_title">Turn on crash reports?</string>
     <string name="sentry_enable_dialog_subtitle">Crash reports help identify device-specific failures without asking you to reproduce the issue with ADB logs.</string>
     <string name="sentry_enable_dialog_subtitle_desktop">Crash reports help identify Windows and macOS failures without asking you to collect logs manually.</string>

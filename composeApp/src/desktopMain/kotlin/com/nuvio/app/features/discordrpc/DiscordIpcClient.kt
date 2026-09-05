@@ -8,9 +8,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.putJsonObject
 import java.io.Closeable
 import java.io.EOFException
 import java.io.RandomAccessFile
@@ -27,9 +33,15 @@ import java.util.UUID
 private const val OpcodeHandshake = 0
 private const val OpcodeFrame = 1
 
+/**
+ * `explicitNulls = false` so that unset activity fields (buttons, small image, end timestamp, ...)
+ * are omitted from the payload rather than serialized as `null`. Discord's activity validator
+ * rejects some explicitly-null fields, and the clear-presence case is encoded by hand below so
+ * it still sends a real `"activity": null`.
+ */
 private val discordIpcJson = Json {
     ignoreUnknownKeys = true
-    explicitNulls = true
+    explicitNulls = false
 }
 
 @Serializable
@@ -38,18 +50,18 @@ private data class HandshakePayload(
     @SerialName("client_id") val clientId: String,
 )
 
-@Serializable
-private data class SetActivityArgs(
-    val pid: Int,
-    val activity: DiscordActivity?,
-)
-
-@Serializable
-private data class SetActivityCommand(
-    val cmd: String,
-    val nonce: String,
-    val args: SetActivityArgs,
-)
+private fun buildSetActivityCommand(pid: Int, nonce: String, activity: DiscordActivity?): String {
+    val payload = buildJsonObject {
+        put("cmd", JsonPrimitive("SET_ACTIVITY"))
+        put("nonce", JsonPrimitive(nonce))
+        putJsonObject("args") {
+            put("pid", JsonPrimitive(pid))
+            // Clearing presence requires an explicit null, not an omitted key.
+            put("activity", activity?.let { discordIpcJson.encodeToJsonElement(it) } ?: JsonNull)
+        }
+    }
+    return discordIpcJson.encodeToString(JsonObject.serializer(), payload)
+}
 
 private interface DiscordPipe : Closeable {
     fun write(bytes: ByteArray)
@@ -162,12 +174,8 @@ internal class DiscordIpcClient(private val clientId: String) {
     suspend fun setActivity(activity: DiscordActivity?): Boolean = withContext(Dispatchers.IO) {
         val currentPipe = pipe ?: return@withContext false
         try {
-            val command = SetActivityCommand(
-                cmd = "SET_ACTIVITY",
-                nonce = UUID.randomUUID().toString(),
-                args = SetActivityArgs(pid = pid, activity = activity),
-            )
-            val encodedCommand = discordIpcJson.encodeToString(command)
+            val nonce = UUID.randomUUID().toString()
+            val encodedCommand = buildSetActivityCommand(pid = pid, nonce = nonce, activity = activity)
             writeFrame(currentPipe, OpcodeFrame, encodedCommand)
             val (responseOpcode, responsePayload) = readFrame(currentPipe)
             val response = discordIpcJson.parseToJsonElement(responsePayload).jsonObject
@@ -175,7 +183,7 @@ internal class DiscordIpcClient(private val clientId: String) {
             val responseEvent = response["evt"]?.jsonPrimitive?.contentOrNull
             val responseNonce = response["nonce"]?.jsonPrimitive?.contentOrNull
             check(responseOpcode == OpcodeFrame) { "unexpected Discord response opcode=$responseOpcode" }
-            check(responseCommand == "SET_ACTIVITY" && responseNonce == command.nonce) {
+            check(responseCommand == "SET_ACTIVITY" && responseNonce == nonce) {
                 "unexpected Discord response cmd=$responseCommand evt=$responseEvent nonce=$responseNonce"
             }
             true

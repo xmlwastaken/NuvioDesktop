@@ -20,10 +20,23 @@ internal sealed interface PresenceSnapshot {
     data class Details(val title: String) : PresenceSnapshot
 
     data class Player(
+        /** Series or movie name — the headline of the Discord card. */
         val title: String,
-        val episodeLabel: String?,
+        val seasonNumber: Int? = null,
+        val episodeNumber: Int? = null,
+        val episodeTitle: String? = null,
+        /** Release info as reported by the addon, e.g. `2024` or `2011-2019`. */
+        val year: String? = null,
         val posterUrl: String?,
         val isPlaying: Boolean,
         val positionMs: Long,
-    ) : PresenceSnapshot
+        /** Total runtime of the current item, or 0 when unknown (live streams, still loading). */
+        val durationMs: Long = 0L,
+        /** Stremio-style catalogue id of the parent item, e.g. `tt0944947` or `kitsu:12345`. */
+        val metaId: String? = null,
+        /** `movie` or `series`. */
+        val metaType: String? = null,
+    ) : PresenceSnapshot {
+        val isSeries: Boolean get() = seasonNumber != null && episodeNumber != null
+    }
 }

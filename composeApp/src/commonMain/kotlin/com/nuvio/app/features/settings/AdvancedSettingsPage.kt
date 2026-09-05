@@ -185,6 +185,54 @@ internal fun LazyListScope.advancedSettingsContent(
                         isTablet = isTablet,
                         onCheckedChange = DiscordRichPresenceRepository::setEnabled,
                     )
+                    if (discordEnabled) {
+                        val discordShowButtons by DiscordRichPresenceRepository.showButtons
+                            .collectAsStateWithLifecycle()
+                        val discordHideWhenPaused by DiscordRichPresenceRepository.hideWhenPaused
+                            .collectAsStateWithLifecycle()
+                        val discordShowBrowsing by DiscordRichPresenceRepository.showBrowsing
+                            .collectAsStateWithLifecycle()
+                        val discordShowSmallImage by DiscordRichPresenceRepository.showSmallImage
+                            .collectAsStateWithLifecycle()
+                        val discordSwapNameAndTitle by DiscordRichPresenceRepository.swapNameAndTitle
+                            .collectAsStateWithLifecycle()
+
+                        SettingsSwitchRow(
+                            title = stringResource(Res.string.settings_advanced_discord_buttons),
+                            description = stringResource(Res.string.settings_advanced_discord_buttons_description),
+                            checked = discordShowButtons,
+                            isTablet = isTablet,
+                            onCheckedChange = DiscordRichPresenceRepository::setShowButtons,
+                        )
+                        SettingsSwitchRow(
+                            title = stringResource(Res.string.settings_advanced_discord_browsing),
+                            description = stringResource(Res.string.settings_advanced_discord_browsing_description),
+                            checked = discordShowBrowsing,
+                            isTablet = isTablet,
+                            onCheckedChange = DiscordRichPresenceRepository::setShowBrowsing,
+                        )
+                        SettingsSwitchRow(
+                            title = stringResource(Res.string.settings_advanced_discord_small_image),
+                            description = stringResource(Res.string.settings_advanced_discord_small_image_description),
+                            checked = discordShowSmallImage,
+                            isTablet = isTablet,
+                            onCheckedChange = DiscordRichPresenceRepository::setShowSmallImage,
+                        )
+                        SettingsSwitchRow(
+                            title = stringResource(Res.string.settings_advanced_discord_swap_title),
+                            description = stringResource(Res.string.settings_advanced_discord_swap_title_description),
+                            checked = discordSwapNameAndTitle,
+                            isTablet = isTablet,
+                            onCheckedChange = DiscordRichPresenceRepository::setSwapNameAndTitle,
+                        )
+                        SettingsSwitchRow(
+                            title = stringResource(Res.string.settings_advanced_discord_hide_paused),
+                            description = stringResource(Res.string.settings_advanced_discord_hide_paused_description),
+                            checked = discordHideWhenPaused,
+                            isTablet = isTablet,
+                            onCheckedChange = DiscordRichPresenceRepository::setHideWhenPaused,
+                        )
+                    }
                 }
             }
         }

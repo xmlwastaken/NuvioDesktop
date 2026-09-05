@@ -16,4 +16,11 @@ internal actual object DiscordRichPresenceStorage {
     actual fun saveEnabled(enabled: Boolean) {
         store.putBoolean(enabledKey, enabled)
     }
+
+    actual fun loadFlag(key: String): Boolean? =
+        if (store.contains(key)) store.getBoolean(key) else null
+
+    actual fun saveFlag(key: String, value: Boolean) {
+        store.putBoolean(key, value)
+    }
 }

@@ -37,6 +37,7 @@ import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
 import com.nuvio.app.features.watching.application.WatchingState
 import com.nuvio.app.isDesktop
 import com.nuvio.app.isIos
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -44,6 +45,9 @@ import nuvio.composeapp.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 
 private val playerControlsLog = Logger.withTag("PlayerControls")
+
+/** How often the player re-publishes its presence snapshot so seeks reach Discord promptly. */
+private const val PresenceRefreshIntervalMs = 5_000L
 
 @Composable
 internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
@@ -61,21 +65,28 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
     val isEpisode = seasonNumber != null && episodeNumber != null
 
     LaunchedEffect(runtime.title, runtime.poster, seasonNumber, episodeNumber, episodeTitle, playbackSnapshot.isPlaying) {
-        val episodeLabel = if (isEpisode) {
-            val base = "S${seasonNumber}E${episodeNumber}"
-            if (!episodeTitle.isNullOrBlank()) "$base - $episodeTitle" else base
-        } else {
-            null
+        // Re-publish on a timer as well as on state changes: position/duration are not effect keys
+        // (they change every frame), but a seek has to be reflected in the Discord progress bar.
+        // Consumers de-duplicate, so a republish with unchanged values costs nothing.
+        while (true) {
+            val snapshot = runtime.playbackSnapshot
+            AppPresenceState.publish(
+                PresenceSnapshot.Player(
+                    title = runtime.title,
+                    seasonNumber = seasonNumber,
+                    episodeNumber = episodeNumber,
+                    episodeTitle = episodeTitle,
+                    year = runtime.metaUiState.meta?.releaseInfo,
+                    posterUrl = runtime.poster,
+                    isPlaying = snapshot.isPlaying,
+                    positionMs = snapshot.positionMs,
+                    durationMs = snapshot.durationMs,
+                    metaId = runtime.parentMetaId,
+                    metaType = runtime.parentMetaType,
+                ),
+            )
+            delay(PresenceRefreshIntervalMs)
         }
-        AppPresenceState.publish(
-            PresenceSnapshot.Player(
-                title = runtime.title,
-                episodeLabel = episodeLabel,
-                posterUrl = runtime.poster,
-                isPlaying = playbackSnapshot.isPlaying,
-                positionMs = playbackSnapshot.positionMs,
-            ),
-        )
     }
 
     val currentGestureFeedback = liveGestureFeedback ?: gestureFeedback
