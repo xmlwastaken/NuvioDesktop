@@ -1,0 +1,141 @@
+name: Build Nuvio DRP (Windows)
+
+# Fork-friendly Windows build.
+#
+# The bundled desktop-release.yml cannot run on a fork: its "Configure desktop
+# runtime" step hard-fails unless NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64,
+# SENTRY_AUTH_TOKEN and SENTRY_DESKTOP_DSN are all set, and then insists
+# local.properties contains Nuvio's Supabase and Trakt credentials.
+#
+# Those are a release-quality gate, not a build requirement: every one of those
+# keys is read in build.gradle.kts via getProperty(key, "") / runtimeConfigValue()
+# and falls back to an empty string. So this workflow keeps the real build steps
+# and swaps that gate for a self-provisioned local.properties.
+#
+# Consequence: Trakt sync, Supabase accounts and Sentry reporting are inert in
+# the resulting build. Playback, addons and Discord Rich Presence work normally.
+# Supply the NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64 secret on your fork if you
+# want those wired up.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64 MSI
+    runs-on: windows-2022
+    env:
+      WEBVIEW2_VERSION: 1.0.4078.44
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Fetch bundled Windows runtime from Git LFS
+        shell: bash
+        run: |
+          git lfs pull \
+            --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" \
+            --exclude=""
+          runtime_path="composeApp/src/desktopMain/native/windows/runtime/libmpv-2.dll"
+          if [[ ! -f "${runtime_path}" ]]; then
+            echo "::error::libmpv-2.dll is missing. Your fork could not fetch Git LFS objects." >&2
+            exit 1
+          fi
+          runtime_size="$(wc -c < "${runtime_path}")"
+          if (( runtime_size < 1000000 )); then
+            echo "::error::libmpv-2.dll is still an LFS pointer (${runtime_size} bytes)." >&2
+            exit 1
+          fi
+          echo "libmpv runtime OK (${runtime_size} bytes)."
+
+      - name: Read desktop version
+        id: version
+        shell: bash
+        run: |
+          version="$(grep -E '^VERSION_NAME=' composeApp/Configuration/DesktopVersion.properties | cut -d= -f2 | tr -d '[:space:]')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building Nuvio ${version}"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Provision local.properties
+        shell: bash
+        env:
+          LOCAL_PROPERTIES_BASE64: ${{ secrets.NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64 }}
+        run: |
+          if [[ -n "${LOCAL_PROPERTIES_BASE64}" ]]; then
+            printf '%s' "${LOCAL_PROPERTIES_BASE64}" | base64 --decode > local.properties
+            echo "Using local.properties from repository secret."
+          else
+            : > local.properties
+            echo "No secret provided; building with empty runtime configuration."
+          fi
+          # sdk.dir must come from the runner's ANDROID_HOME, not from a baked-in path.
+          sed -i -E '/^[[:space:]]*sdk\.dir[[:space:]]*=/d' local.properties
+          # Discord application id. build.gradle.kts already defaults to Nuvio's own id,
+          # this only pins it explicitly. Replace it if you registered your own app.
+          if ! grep -Eq '^[[:space:]]*NUVIO_DISCORD_CLIENT_ID[[:space:]]*=' local.properties; then
+            echo 'NUVIO_DISCORD_CLIENT_ID=1538974392376369212' >> local.properties
+          fi
+          echo "--- local.properties keys (values hidden) ---"
+          sed -E 's/=.*/=<set>/' local.properties || true
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 `
+            -Version $env:WEBVIEW2_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP\nuget" `
+            -DirectDownload `
+            -NonInteractive `
+            -NoCache
+
+          $webView2Root = Join-Path $env:RUNNER_TEMP "nuget\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          $loaderLibrary = Join-Path $webView2Root "build\native\x64\WebView2Loader.dll.lib"
+          if (-not (Test-Path $loaderLibrary)) {
+            throw "WebView2Loader.dll.lib was not found at $loaderLibrary"
+          }
+          "WEBVIEW2_ROOT=$webView2Root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          & .\gradlew.bat `
+            :composeApp:packageReleaseMsi `
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
+            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
+            --no-configuration-cache `
+            --no-daemon `
+            --stacktrace
+
+      - name: Summarise output
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "composeApp\build\compose\release-msis" -Filter *.msi -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if ($null -eq $msi) { throw "No MSI was produced." }
+          $hash = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "MSI:    $($msi.Name)"
+          Write-Host "Size:   $([math]::Round($msi.Length / 1MB, 1)) MB"
+          Write-Host "SHA256: $hash"
+          "### Nuvio DRP build`n`n- **MSI:** $($msi.Name)`n- **Size:** $([math]::Round($msi.Length / 1MB, 1)) MB`n- **SHA256:** ``$hash``" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuvio-drp-${{ steps.version.outputs.version }}-windows-x64
+          path: composeApp/build/compose/release-msis/*.msi
+          if-no-files-found: error
+          retention-days: 14
