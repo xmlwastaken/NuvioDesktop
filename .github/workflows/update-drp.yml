@@ -1,0 +1,197 @@
+name: Update from upstream and build
+
+# One-button updater.
+#
+# Works out your Discord RPC changes automatically (everything on your branch
+# that isn't in upstream), applies them on top of the LATEST upstream Dev, and
+# builds a fresh MSI. Nothing to paste, nothing to re-patch by hand.
+#
+# It never rewrites your branch - the rebase happens on a throwaway branch
+# inside the runner, so your fork is left exactly as it is.
+#
+# If upstream edits the same lines we do, the patch stops applying and this
+# fails with a clear message rather than producing a silently broken build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Also publish the MSI as a downloadable release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Rebase Discord RPC onto latest upstream, then build
+    runs-on: windows-2022
+    env:
+      WEBVIEW2_VERSION: 1.0.4078.44
+
+    steps:
+      - name: Check out your fork (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply your Discord RPC changes to the latest upstream code
+        shell: bash
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name  "github-actions"
+
+          git remote add upstream https://github.com/NuvioMedia/NuvioDesktop.git
+          git fetch --no-tags upstream Dev
+
+          branch="${{ github.ref_name }}"
+          base="$(git merge-base "origin/${branch}" upstream/Dev)"
+
+          echo "your branch      : ${branch} ($(git rev-parse --short origin/${branch}))"
+          echo "shared ancestor  : $(git rev-parse --short ${base})"
+          echo "upstream Dev now : $(git rev-parse --short upstream/Dev)"
+
+          # Your changes = everything under composeApp/ that you added on top of
+          # the shared ancestor. Restricted to composeApp so CI files aren't dragged in.
+          git diff "${base}" "origin/${branch}" -- composeApp > "${RUNNER_TEMP}/drp.patch"
+          lines="$(wc -l < "${RUNNER_TEMP}/drp.patch")"
+          echo "your changes     : ${lines} diff lines"
+          if [[ "${lines}" -eq 0 ]]; then
+            echo "::error::No changes found under composeApp/. Nothing to apply." >&2
+            exit 1
+          fi
+
+          git checkout -B drp-build upstream/Dev
+
+          if git apply --3way --whitespace=nowarn "${RUNNER_TEMP}/drp.patch"; then
+            echo "Discord RPC changes applied cleanly to the latest upstream."
+          else
+            echo "::error::Your Discord RPC changes no longer apply to upstream Dev - upstream has edited the same code. This needs a manual look; send this log to get it re-based." >&2
+            git status --short
+            exit 1
+          fi
+
+          echo "--- files changed on top of upstream ---"
+          git status --short
+
+      - name: Fetch bundled Windows runtime from Git LFS
+        shell: bash
+        run: |
+          git lfs pull upstream \
+            --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" \
+            --exclude=""
+          runtime_path="composeApp/src/desktopMain/native/windows/runtime/libmpv-2.dll"
+          size="$( [[ -f "${runtime_path}" ]] && wc -c < "${runtime_path}" || echo 0 )"
+          if (( size < 1000000 )); then
+            echo "::error::libmpv-2.dll not materialised from Git LFS (${size} bytes)." >&2
+            exit 1
+          fi
+          echo "libmpv runtime OK (${size} bytes)."
+
+      - name: Read the new version
+        id: version
+        shell: bash
+        run: |
+          version="$(grep -E '^VERSION_NAME=' composeApp/Configuration/DesktopVersion.properties | cut -d= -f2 | tr -d '[:space:]')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building Nuvio ${version} with Discord Rich Presence"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Provision local.properties
+        shell: bash
+        env:
+          LOCAL_PROPERTIES_BASE64: ${{ secrets.NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64 }}
+        run: |
+          if [[ -n "${LOCAL_PROPERTIES_BASE64}" ]]; then
+            printf '%s' "${LOCAL_PROPERTIES_BASE64}" | base64 --decode > local.properties
+            echo "Using local.properties from repository secret (account sign-in enabled)."
+          else
+            : > local.properties
+            echo "::warning::No NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64 secret - account sign-in will not work in this build."
+          fi
+          sed -i -E '/^[[:space:]]*sdk\.dir[[:space:]]*=/d' local.properties
+          if ! grep -Eq '^[[:space:]]*NUVIO_DISCORD_CLIENT_ID[[:space:]]*=' local.properties; then
+            echo 'NUVIO_DISCORD_CLIENT_ID=1538974392376369212' >> local.properties
+          fi
+          echo "--- local.properties keys (values hidden) ---"
+          sed -E 's/=.*/=<set>/' local.properties || true
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 `
+            -Version $env:WEBVIEW2_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP\nuget" `
+            -DirectDownload `
+            -NonInteractive `
+            -NoCache
+
+          $webView2Root = Join-Path $env:RUNNER_TEMP "nuget\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          if (-not (Test-Path (Join-Path $webView2Root "build\native\x64\WebView2Loader.dll.lib"))) {
+            throw "WebView2 SDK not found at $webView2Root"
+          }
+          "WEBVIEW2_ROOT=$webView2Root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          & .\gradlew.bat `
+            :composeApp:packageReleaseMsi `
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
+            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
+            --no-configuration-cache `
+            --no-daemon `
+            --stacktrace
+
+      - name: Summarise
+        id: msi
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "composeApp\build\compose\release-msis" -Filter *.msi | Select-Object -First 1
+          if ($null -eq $msi) { throw "No MSI was produced." }
+          $hash = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "path=$($msi.FullName)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "name=$($msi.Name)"     | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha=$hash"             | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "### Nuvio + Discord RPC`n`n- **MSI:** $($msi.Name)`n- **Size:** $([math]::Round($msi.Length/1MB,1)) MB`n- **SHA256:** ``$hash``" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuvio-drp-${{ steps.version.outputs.version }}-windows-x64
+          path: composeApp/build/compose/release-msis/*.msi
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release
+        if: ${{ inputs.publish_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="drp-${{ steps.version.outputs.version }}"
+          msi="${{ steps.msi.outputs.path }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" "$msi" --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "$tag" "$msi" \
+              --repo "${{ github.repository }}" \
+              --title "Nuvio ${{ steps.version.outputs.version }} + Discord Rich Presence" \
+              --notes "Unofficial build: upstream Nuvio ${{ steps.version.outputs.version }} with the upgraded Discord Rich Presence applied.
+
+          SHA256: \`${{ steps.msi.outputs.sha }}\`
+
+          Unsigned installer - SmartScreen will warn, choose More info then Run anyway.
+          Enable under Settings > Advanced > Discord."
+          fi
+          echo "https://github.com/${{ github.repository }}/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
