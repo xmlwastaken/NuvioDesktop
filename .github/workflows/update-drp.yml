@@ -47,7 +47,7 @@ jobs:
             echo "::error::No drp/ folder found on branch ${BRANCH}. Add it before running this workflow." >&2
             exit 1
           fi
-          echo "--- Rich Presence files found in drp/ ---"
+          echo "--- files sitting in drp/ (only the ones listed below are used) ---"
           ( cd drp && find . -type f | sort )
 
           mkdir -p "${RUNNER_TEMP}/overlay"
@@ -76,20 +76,25 @@ jobs:
       - name: Lay the Rich Presence files over the upstream code
         shell: bash
         run: |
-          cp -r "${RUNNER_TEMP}/overlay/." .
-          echo "--- Rich Presence files now in place ---"
+          # Copy the known files one by one rather than the whole folder. An explicit list means
+          # a file left behind in drp/ from an older version can never be copied in by accident
+          # and break the build.
           for f in \
             "composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AppPresenceState.kt" \
             "composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordActivity.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordIpcClient.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordPresenceManager.kt" ; do
-            if [[ ! -f "${f}" ]]; then
-              echo "::error::Missing after overlay: ${f}" >&2
+            src="${RUNNER_TEMP}/overlay/${f}"
+            if [[ ! -f "${src}" ]]; then
+              echo "::error::Missing from drp/: ${f}" >&2
               exit 1
             fi
+            mkdir -p "$(dirname "${f}")"
+            cp "${src}" "${f}"
+            echo "  applied  ${f}"
           done
-          echo "all 5 files present"
+          echo "all 5 Rich Presence files in place"
           git status --short
 
       - name: Read the new version
