@@ -2,15 +2,17 @@ name: Update from upstream and build
 
 # One-button updater.
 #
-# Works out your Discord RPC changes automatically (everything on your branch
-# that isn't in upstream), applies them on top of the LATEST upstream Dev, and
-# builds a fresh MSI. Nothing to paste, nothing to re-patch by hand.
+# Instead of re-applying a diff (which breaks every time upstream edits the
+# same lines), this keeps the Rich Presence files in their own folder, drp/,
+# which upstream never touches. Every run:
 #
-# It never rewrites your branch - the rebase happens on a throwaway branch
-# inside the runner, so your fork is left exactly as it is.
+#   1. takes a clean checkout of the LATEST upstream Dev
+#   2. copies the drp/ files over it
+#   3. builds a fresh MSI
 #
-# If upstream edits the same lines we do, the patch stops applying and this
-# fails with a clear message rather than producing a silently broken build.
+# That cannot conflict, and it always builds against current upstream.
+# Your branch is never rewritten - the work happens on a throwaway branch
+# inside the runner.
 
 on:
   workflow_dispatch:
@@ -25,55 +27,37 @@ permissions:
 
 jobs:
   build:
-    name: Rebase Discord RPC onto latest upstream, then build
+    name: Apply Discord RPC onto latest upstream, then build
     runs-on: windows-2022
     env:
       WEBVIEW2_VERSION: 1.0.4078.44
 
     steps:
-      - name: Check out your fork (full history)
+      - name: Check out your fork (full history, for the drp/ folder)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Apply your Discord RPC changes to the latest upstream code
+      - name: Stash the Rich Presence files, then check out clean upstream
         shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
-          git config user.email "actions@github.com"
-          git config user.name  "github-actions"
+          if [[ ! -d drp ]]; then
+            echo "::error::No drp/ folder found on branch ${BRANCH}. Add it before running this workflow." >&2
+            exit 1
+          fi
+          echo "--- Rich Presence files found in drp/ ---"
+          ( cd drp && find . -type f | sort )
+
+          mkdir -p "${RUNNER_TEMP}/overlay"
+          cp -r drp/. "${RUNNER_TEMP}/overlay/"
 
           git remote add upstream https://github.com/NuvioMedia/NuvioDesktop.git
           git fetch --no-tags upstream Dev
+          git checkout -B drp-build FETCH_HEAD
 
-          branch="${{ github.ref_name }}"
-          base="$(git merge-base "origin/${branch}" upstream/Dev)"
-
-          echo "your branch      : ${branch} ($(git rev-parse --short origin/${branch}))"
-          echo "shared ancestor  : $(git rev-parse --short ${base})"
-          echo "upstream Dev now : $(git rev-parse --short upstream/Dev)"
-
-          # Your changes = everything under composeApp/ that you added on top of
-          # the shared ancestor. Restricted to composeApp so CI files aren't dragged in.
-          git diff "${base}" "origin/${branch}" -- composeApp > "${RUNNER_TEMP}/drp.patch"
-          lines="$(wc -l < "${RUNNER_TEMP}/drp.patch")"
-          echo "your changes     : ${lines} diff lines"
-          if [[ "${lines}" -eq 0 ]]; then
-            echo "::error::No changes found under composeApp/. Nothing to apply." >&2
-            exit 1
-          fi
-
-          git checkout -B drp-build upstream/Dev
-
-          if git apply --3way --whitespace=nowarn "${RUNNER_TEMP}/drp.patch"; then
-            echo "Discord RPC changes applied cleanly to the latest upstream."
-          else
-            echo "::error::Your Discord RPC changes no longer apply to upstream Dev - upstream has edited the same code. This needs a manual look; send this log to get it re-based." >&2
-            git status --short
-            exit 1
-          fi
-
-          echo "--- files changed on top of upstream ---"
-          git status --short
+          echo "upstream Dev now : $(git rev-parse --short HEAD)"
 
       - name: Fetch bundled Windows runtime from Git LFS
         shell: bash
@@ -88,6 +72,27 @@ jobs:
             exit 1
           fi
           echo "libmpv runtime OK (${size} bytes)."
+
+      - name: Lay the Rich Presence files over the upstream code
+        shell: bash
+        run: |
+          cp -r "${RUNNER_TEMP}/overlay/." .
+          echo "--- Rich Presence files now in place ---"
+          for f in \
+            "composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AppPresenceState.kt" \
+            "composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt" \
+            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt" \
+            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt" \
+            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt" \
+            "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordActivity.kt" \
+            "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordPresenceManager.kt" ; do
+            if [[ ! -f "${f}" ]]; then
+              echo "::error::Missing after overlay: ${f}" >&2
+              exit 1
+            fi
+          done
+          echo "all 7 files present"
+          git status --short
 
       - name: Read the new version
         id: version
