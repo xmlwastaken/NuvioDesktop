@@ -80,18 +80,16 @@ jobs:
           echo "--- Rich Presence files now in place ---"
           for f in \
             "composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AppPresenceState.kt" \
-            "composeApp/src/commonMain/kotlin/com/nuvio/app/MainAppContent.kt" \
-            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/details/MetaDetailsScreen.kt" \
-            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/search/SearchScreen.kt" \
             "composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordActivity.kt" \
+            "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordIpcClient.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordPresenceManager.kt" ; do
             if [[ ! -f "${f}" ]]; then
               echo "::error::Missing after overlay: ${f}" >&2
               exit 1
             fi
           done
-          echo "all 7 files present"
+          echo "all 5 files present"
           git status --short
 
       - name: Read the new version

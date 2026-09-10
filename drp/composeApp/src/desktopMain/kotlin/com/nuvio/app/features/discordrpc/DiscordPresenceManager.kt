@@ -1,7 +1,6 @@
 package com.nuvio.app.features.discordrpc
 
 import co.touchlab.kermit.Logger
-import com.nuvio.app.AppScreenTab
 import com.nuvio.app.core.ui.AppPresenceState
 import com.nuvio.app.core.ui.PresenceSnapshot
 import com.nuvio.app.features.settings.DiscordRichPresenceRepository
@@ -23,8 +22,7 @@ private class DiscordDisconnected : Exception()
 private const val ReconnectDelayMs = 15_000L
 
 /**
- * Fallback artwork for anything that has no poster of its own: the menu screens, and titles whose
- * addon never returned an image.
+ * Fallback artwork for a title whose addon never returned a poster.
  */
 private const val NuvioIconUrl =
     "https://raw.githubusercontent.com/NuvioMedia/NuvioDesktop/Dev/composeApp/src/desktopMain/resources/icons/app-icon-graphite-transparent.png"
@@ -36,10 +34,6 @@ private const val NuvioIconUrl =
  */
 private const val ImageProxyTemplate =
     "https://images.weserv.nl/?url=%s&w=1024&h=1024&fit=contain&cbg=black&output=png"
-
-/** Identity of the context the elapsed timer is counting from, and the moment that started. */
-private var presenceKey: String? = null
-private var presenceSinceSec = System.currentTimeMillis() / 1_000L
 
 internal object DiscordPresenceManager {
     private val log = Logger.withTag("DiscordPresenceManager")
@@ -69,12 +63,16 @@ internal object DiscordPresenceManager {
                 val connected = client.connect()
                 if (connected) {
                     lastActivity = null
-                    presenceKey = null
                     try {
                         AppPresenceState.current.collect { snapshot ->
                             val activity = snapshot.toDiscordActivity()
-                            // The player re-publishes every few seconds; only push real changes.
-                            if (activity.isEquivalentTo(lastActivity)) return@collect
+                            if (activity == null) {
+                                // Browsing: nothing to show, so clear the card once and idle.
+                                if (lastActivity == null) return@collect
+                            } else if (activity.isEquivalentTo(lastActivity)) {
+                                // The player re-publishes every few seconds; only push real changes.
+                                return@collect
+                            }
                             if (client.setActivity(activity)) {
                                 lastActivity = activity
                             } else {
@@ -100,68 +98,12 @@ internal object DiscordPresenceManager {
     }
 }
 
-private fun PresenceSnapshot?.toDiscordActivity(): DiscordActivity {
-    // Restart the menu elapsed timer whenever the user actually moves somewhere else, keyed on
-    // identity so that the player's periodic republish does not keep resetting it.
-    val key = this?.presenceKey
-    if (key != presenceKey) {
-        presenceKey = key
-        presenceSinceSec = System.currentTimeMillis() / 1_000L
-    }
-    return when (this) {
-        null -> browsingActivity(tab = null, query = null, sinceSec = presenceSinceSec)
-        is PresenceSnapshot.Tab -> browsingActivity(tab = tab, query = searchQuery, sinceSec = presenceSinceSec)
-        is PresenceSnapshot.Details -> detailsActivity(sinceSec = presenceSinceSec)
-        is PresenceSnapshot.Player -> toPlayerActivity()
-    }
-}
-
 /**
- * Menu presence. Nothing is being watched here, so the activity type is Playing and Discord
- * reads "Playing Nuvio"; the second line says what is actually being done, matching the wording
- * stremio-shell-ng uses for its own menu states.
+ * Presence is reported for playback only. Home, Search, Library, Settings and title details
+ * pages all clear the card rather than showing a browsing status.
  */
-private fun browsingActivity(tab: AppScreenTab?, query: String?, sinceSec: Long): DiscordActivity {
-    val trimmedQuery = query?.trim().orEmpty()
-    val (state, details) = when (tab) {
-        AppScreenTab.Home -> "Home" to "Browsing"
-        AppScreenTab.Search -> (if (trimmedQuery.isEmpty()) "Search" else trimmedQuery) to "Searching"
-        AppScreenTab.Library -> "Library" to "Browsing library"
-        AppScreenTab.Settings -> "Settings" to "Changing configuration"
-        else -> "Nuvio" to "Browsing"
-    }
-
-    return DiscordActivity(
-        type = DiscordActivityTypes.PLAYING,
-        name = "Nuvio",
-        details = details,
-        state = state,
-        timestamps = DiscordActivityTimestamps(start = sinceSec),
-        assets = DiscordActivityAssets(largeImage = NuvioIconUrl, largeText = "Nuvio"),
-    )
-}
-
-/**
- * Presence for a title's details page. The poster becomes the artwork and the title sits on the
- * second line, so Discord shows what is being looked at without claiming it is being watched -
- * the Playing type is what puts "Playing Nuvio" rather than "Watching ..." on the first line.
- */
-private fun PresenceSnapshot.Details.detailsActivity(sinceSec: Long): DiscordActivity {
-    val releaseYear = year?.trim()?.takeIf { it.isNotEmpty() }
-    val largeText = if (releaseYear != null) "$title ($releaseYear)" else title
-
-    return DiscordActivity(
-        type = DiscordActivityTypes.PLAYING,
-        name = "Nuvio",
-        details = "Viewing $title",
-        state = releaseYear,
-        timestamps = DiscordActivityTimestamps(start = sinceSec),
-        assets = DiscordActivityAssets(
-            largeImage = posterUrl?.toDiscordImageUrl() ?: NuvioIconUrl,
-            largeText = largeText,
-        ),
-    )
-}
+private fun PresenceSnapshot?.toDiscordActivity(): DiscordActivity? =
+    (this as? PresenceSnapshot.Player)?.buildActivity()
 
 /**
  * Mirrors the card layout stremio-shell-ng produces.
@@ -169,7 +111,7 @@ private fun PresenceSnapshot.Details.detailsActivity(sinceSec: Long): DiscordAct
  * Series: name = show title, details = episode title, state = "S3E9".
  * Movie:  name = details = title, state = release year.
  */
-private fun PresenceSnapshot.Player.toPlayerActivity(): DiscordActivity {
+private fun PresenceSnapshot.Player.buildActivity(): DiscordActivity {
     val releaseYear = year?.trim()?.takeIf { it.isNotEmpty() }
     val episode = episodeTitle?.trim()?.takeIf { it.isNotEmpty() }
 

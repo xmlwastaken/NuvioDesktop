@@ -4,14 +4,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Discord activity types this app emits. The type is what picks the verb on the first line of
- * the card - there is no "Browsing" or "Viewing" type, so menus have to borrow one:
- *
- *   PLAYING  (0) -> "Playing Nuvio"    used while browsing, where nothing is being watched
- *   WATCHING (3) -> "Watching <title>" used only during actual playback
+ * Discord activity types this app emits. 3 ("Watching") makes the client render
+ * "Watching <title>" instead of "Playing Nuvio", which is what a media player should report.
  */
 internal object DiscordActivityTypes {
-    const val PLAYING = 0
     const val WATCHING = 3
 }
 
