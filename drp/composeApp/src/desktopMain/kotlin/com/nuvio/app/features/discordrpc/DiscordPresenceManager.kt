@@ -117,8 +117,9 @@ private fun PresenceSnapshot?.toDiscordActivity(): DiscordActivity {
 }
 
 /**
- * Menu presence. The headline stays "Watching Nuvio" and the second line says what is actually
- * being done, matching the wording stremio-shell-ng uses for its own menu states.
+ * Menu presence. Nothing is being watched here, so the activity type is Playing and Discord
+ * reads "Playing Nuvio"; the second line says what is actually being done, matching the wording
+ * stremio-shell-ng uses for its own menu states.
  */
 private fun browsingActivity(tab: AppScreenTab?, query: String?, sinceSec: Long): DiscordActivity {
     val trimmedQuery = query?.trim().orEmpty()
@@ -131,7 +132,7 @@ private fun browsingActivity(tab: AppScreenTab?, query: String?, sinceSec: Long)
     }
 
     return DiscordActivity(
-        type = DiscordActivityTypes.WATCHING,
+        type = DiscordActivityTypes.PLAYING,
         name = "Nuvio",
         details = details,
         state = state,
@@ -141,17 +142,18 @@ private fun browsingActivity(tab: AppScreenTab?, query: String?, sinceSec: Long)
 }
 
 /**
- * Presence for a title's details page: the title leads the card and its poster becomes the
- * artwork, so Discord shows what is being looked at rather than the app logo.
+ * Presence for a title's details page. The poster becomes the artwork and the title sits on the
+ * second line, so Discord shows what is being looked at without claiming it is being watched -
+ * the Playing type is what puts "Playing Nuvio" rather than "Watching ..." on the first line.
  */
 private fun PresenceSnapshot.Details.detailsActivity(sinceSec: Long): DiscordActivity {
     val releaseYear = year?.trim()?.takeIf { it.isNotEmpty() }
     val largeText = if (releaseYear != null) "$title ($releaseYear)" else title
 
     return DiscordActivity(
-        type = DiscordActivityTypes.WATCHING,
-        name = title,
-        details = "Viewing details",
+        type = DiscordActivityTypes.PLAYING,
+        name = "Nuvio",
+        details = "Viewing $title",
         state = releaseYear,
         timestamps = DiscordActivityTimestamps(start = sinceSec),
         assets = DiscordActivityAssets(
