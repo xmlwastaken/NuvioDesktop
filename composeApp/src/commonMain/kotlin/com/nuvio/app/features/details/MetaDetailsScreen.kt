@@ -96,6 +96,8 @@ import com.nuvio.app.core.ui.desktopPageHorizontalPaddingForWidth
 import com.nuvio.app.core.ui.nuvioDesktopDragScroll
 import com.nuvio.app.core.ui.TrackingListPickerDialog
 import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+import com.nuvio.app.core.ui.AppPresenceState
+import com.nuvio.app.core.ui.PresenceSnapshot
 import com.nuvio.app.core.ui.rememberHeroStretchState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
@@ -267,6 +269,27 @@ fun MetaDetailsScreen(
     val trackingListsUpdateFailedMessage = stringResource(Res.string.tracking_lists_update_failed)
     var episodeImdbRatings by remember(type, id) { mutableStateOf<Map<Pair<Int, Int>, Double>>(emptyMap()) }
     var deferredMetaWorkAllowed by remember(type, id) { mutableStateOf(false) }
+
+    // The app shell publishes the details snapshot as soon as the route appears, but it has no
+    // artwork at that point. Re-publish here once the meta (and therefore the poster) is known.
+    LaunchedEffect(
+        displayedMeta?.id,
+        displayedMeta?.type,
+        displayedMeta?.name,
+        displayedMeta?.poster,
+        displayedMeta?.releaseInfo,
+    ) {
+        val meta = displayedMeta ?: return@LaunchedEffect
+        AppPresenceState.publish(
+            PresenceSnapshot.Details(
+                title = meta.name,
+                posterUrl = meta.poster,
+                year = meta.releaseInfo,
+                metaId = meta.id,
+                metaType = meta.type,
+            ),
+        )
+    }
 
     LaunchedEffect(
         displayedMeta?.id,
@@ -2538,13 +2561,13 @@ private fun ConfiguredMetaSections(
                 // Standalone section
                 RenderSection(section.key)
             } else if (groupId !in processedGroups) {
-                // First encounter of this group — render the whole tabbed group
+                // First encounter of this group - render the whole tabbed group
                 processedGroups.add(groupId)
                 val groupMembers = enabledItems
                     .filter { it.tabGroup == groupId && sectionHasContent(it.key) }
                 if (groupMembers.isEmpty()) return@forEach
                 if (groupMembers.size == 1) {
-                    // Only one member with content — render standalone
+                    // Only one member with content - render standalone
                     RenderSection(groupMembers.first().key)
                 } else {
                     TabbedSectionGroup(

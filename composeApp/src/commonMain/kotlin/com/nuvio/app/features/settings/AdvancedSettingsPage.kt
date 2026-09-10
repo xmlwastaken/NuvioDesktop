@@ -45,8 +45,6 @@ import nuvio.composeapp.generated.resources.settings_advanced_discord_hide_pause
 import nuvio.composeapp.generated.resources.settings_advanced_discord_hide_paused_description
 import nuvio.composeapp.generated.resources.settings_advanced_discord_rich_presence
 import nuvio.composeapp.generated.resources.settings_advanced_discord_rich_presence_description
-import nuvio.composeapp.generated.resources.settings_advanced_discord_small_image
-import nuvio.composeapp.generated.resources.settings_advanced_discord_small_image_description
 import nuvio.composeapp.generated.resources.settings_advanced_discord_swap_title
 import nuvio.composeapp.generated.resources.settings_advanced_discord_swap_title_description
 import nuvio.composeapp.generated.resources.settings_advanced_opengl_renderer
@@ -202,8 +200,6 @@ internal fun LazyListScope.advancedSettingsContent(
                             .collectAsStateWithLifecycle()
                         val discordShowBrowsing by DiscordRichPresenceRepository.showBrowsing
                             .collectAsStateWithLifecycle()
-                        val discordShowSmallImage by DiscordRichPresenceRepository.showSmallImage
-                            .collectAsStateWithLifecycle()
                         val discordSwapNameAndTitle by DiscordRichPresenceRepository.swapNameAndTitle
                             .collectAsStateWithLifecycle()
 
@@ -220,13 +216,6 @@ internal fun LazyListScope.advancedSettingsContent(
                             checked = discordShowBrowsing,
                             isTablet = isTablet,
                             onCheckedChange = DiscordRichPresenceRepository::setShowBrowsing,
-                        )
-                        SettingsSwitchRow(
-                            title = stringResource(Res.string.settings_advanced_discord_small_image),
-                            description = stringResource(Res.string.settings_advanced_discord_small_image_description),
-                            checked = discordShowSmallImage,
-                            isTablet = isTablet,
-                            onCheckedChange = DiscordRichPresenceRepository::setShowSmallImage,
                         )
                         SettingsSwitchRow(
                             title = stringResource(Res.string.settings_advanced_discord_swap_title),

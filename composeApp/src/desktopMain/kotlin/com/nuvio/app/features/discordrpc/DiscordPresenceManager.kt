@@ -23,12 +23,12 @@ private class DiscordDisconnected : Exception()
 
 private const val ReconnectDelayMs = 15_000L
 
-private const val NuvioSiteUrl = "https://nuvio-tv.com/"
-
-/** Badge overlaid on the poster. Same paused glyph stremio-shell-ng uses. */
-private const val PausedIconUrl = "https://i.imgur.com/eCUJpm9.png"
+/**
+ * Fallback artwork for anything that has no poster of its own: the menu/tab screens, and titles
+ * whose addon never returned an image.
+ */
 private const val NuvioIconUrl =
-    "https://raw.githubusercontent.com/NuvioMedia/NuvioDesktop/Dev/composeApp/src/desktopMain/resources/icons/nuvio-app-icon-transparent.png"
+    "https://raw.githubusercontent.com/NuvioMedia/NuvioDesktop/Dev/composeApp/src/desktopMain/resources/icons/app-icon-graphite-transparent.png"
 
 /**
  * Posters are arbitrary remote images of arbitrary aspect ratio. Discord crops whatever it is
@@ -44,6 +44,10 @@ internal object DiscordPresenceManager {
     private val client = DiscordIpcClient(DiscordConfig.CLIENT_ID)
     private var syncJob: Job? = null
     private var lastActivity: DiscordActivity? = null
+
+    /** Identity of the context the elapsed timer below is counting from. */
+    private var presenceKey: String? = null
+    private var presenceSinceSec = System.currentTimeMillis() / 1_000L
 
     fun start() {
         if (DiscordConfig.CLIENT_ID.isBlank()) return
@@ -107,17 +111,21 @@ internal object DiscordPresenceManager {
         DiscordRichPresenceRepository.showButtons,
         DiscordRichPresenceRepository.hideWhenPaused,
         DiscordRichPresenceRepository.showBrowsing,
-        combine(
-            DiscordRichPresenceRepository.showSmallImage,
-            DiscordRichPresenceRepository.swapNameAndTitle,
-        ) { showSmallImage, swapNameAndTitle -> showSmallImage to swapNameAndTitle },
-    ) { snapshot, showButtons, hideWhenPaused, showBrowsing, (showSmallImage, swapNameAndTitle) ->
+        DiscordRichPresenceRepository.swapNameAndTitle,
+    ) { snapshot, showButtons, hideWhenPaused, showBrowsing, swapNameAndTitle ->
+        // Restart the elapsed timer whenever the user actually moves somewhere else. The player
+        // refreshes its snapshot every few seconds, so this keys on identity rather than equality.
+        val key = snapshot?.presenceKey
+        if (key != presenceKey) {
+            presenceKey = key
+            presenceSinceSec = System.currentTimeMillis() / 1_000L
+        }
         snapshot.toDiscordActivity(
             showButtons = showButtons,
             hideWhenPaused = hideWhenPaused,
             showBrowsing = showBrowsing,
-            showSmallImage = showSmallImage,
             swapNameAndTitle = swapNameAndTitle,
+            browsingSinceSec = presenceSinceSec,
         )
     }
 }
@@ -126,43 +134,82 @@ private fun PresenceSnapshot?.toDiscordActivity(
     showButtons: Boolean,
     hideWhenPaused: Boolean,
     showBrowsing: Boolean,
-    showSmallImage: Boolean,
     swapNameAndTitle: Boolean,
+    browsingSinceSec: Long,
 ): DiscordActivity? = when (this) {
-    null -> browsingActivity(state = null, showBrowsing = showBrowsing)
-    is PresenceSnapshot.Tab -> browsingActivity(state = tab.presenceLabel(), showBrowsing = showBrowsing)
-    is PresenceSnapshot.Details -> if (showBrowsing) {
-        DiscordActivity(
-            type = DiscordActivityType.WATCHING,
-            name = title,
-            details = title,
-            state = "Viewing details",
-            assets = DiscordActivityAssets(largeImage = NuvioIconUrl, largeText = title),
-        )
-    } else {
-        null
-    }
+    null -> browsingActivity(tab = null, query = null, showBrowsing = showBrowsing, sinceSec = browsingSinceSec)
+    is PresenceSnapshot.Tab -> browsingActivity(
+        tab = tab,
+        query = searchQuery,
+        showBrowsing = showBrowsing,
+        sinceSec = browsingSinceSec,
+    )
+
+    is PresenceSnapshot.Details -> detailsActivity(showBrowsing = showBrowsing, sinceSec = browsingSinceSec)
 
     is PresenceSnapshot.Player -> toPlayerActivity(
         showButtons = showButtons,
         hideWhenPaused = hideWhenPaused,
-        showSmallImage = showSmallImage,
         swapNameAndTitle = swapNameAndTitle,
     )
 }
 
-private fun browsingActivity(state: String?, showBrowsing: Boolean): DiscordActivity? =
-    if (showBrowsing) {
-        DiscordActivity(
-            type = DiscordActivityType.WATCHING,
-            name = "Nuvio",
-            details = "Browsing Nuvio",
-            state = state,
-            assets = DiscordActivityAssets(largeImage = NuvioIconUrl, largeText = "Nuvio"),
-        )
-    } else {
-        null
+/**
+ * Menu presence: the headline stays "Watching Nuvio" and the second line says what is actually
+ * being done, matching the wording stremio-shell-ng uses for its own menu states.
+ */
+private fun browsingActivity(
+    tab: AppScreenTab?,
+    query: String?,
+    showBrowsing: Boolean,
+    sinceSec: Long,
+): DiscordActivity? {
+    if (!showBrowsing) return null
+
+    val trimmedQuery = query?.trim().orEmpty()
+    val (state, details) = when (tab) {
+        AppScreenTab.Home -> "Home" to "Browsing"
+        AppScreenTab.Search -> (if (trimmedQuery.isEmpty()) "Search" else trimmedQuery) to "Searching"
+        AppScreenTab.Library -> "Library" to "Browsing library"
+        AppScreenTab.Settings -> "Settings" to "Changing configuration"
+        else -> "Nuvio" to "Browsing"
     }
+
+    return DiscordActivity(
+        type = DiscordActivityType.WATCHING,
+        name = "Nuvio",
+        details = details,
+        state = state,
+        timestamps = DiscordActivityTimestamps(start = sinceSec),
+        assets = DiscordActivityAssets(largeImage = NuvioIconUrl, largeText = "Nuvio"),
+    )
+}
+
+/**
+ * Presence for a title's details page: the title leads the card and its poster becomes the
+ * artwork, so Discord shows what is being looked at rather than the app logo.
+ */
+private fun PresenceSnapshot.Details.detailsActivity(
+    showBrowsing: Boolean,
+    sinceSec: Long,
+): DiscordActivity? {
+    if (!showBrowsing) return null
+
+    val releaseYear = year?.trim()?.takeIf { it.isNotEmpty() }
+    val largeText = if (releaseYear != null) "$title ($releaseYear)" else title
+
+    return DiscordActivity(
+        type = DiscordActivityType.WATCHING,
+        name = title,
+        details = "Viewing details",
+        state = releaseYear,
+        timestamps = DiscordActivityTimestamps(start = sinceSec),
+        assets = DiscordActivityAssets(
+            largeImage = posterUrl?.toDiscordImageUrl() ?: NuvioIconUrl,
+            largeText = largeText,
+        ),
+    )
+}
 
 /**
  * Mirrors the card layout stremio-shell-ng produces.
@@ -176,7 +223,6 @@ private fun browsingActivity(state: String?, showBrowsing: Boolean): DiscordActi
 private fun PresenceSnapshot.Player.toPlayerActivity(
     showButtons: Boolean,
     hideWhenPaused: Boolean,
-    showSmallImage: Boolean,
     swapNameAndTitle: Boolean,
 ): DiscordActivity? {
     if (!isPlaying && hideWhenPaused) return null
@@ -194,8 +240,9 @@ private fun PresenceSnapshot.Player.toPlayerActivity(
         details = previousName
     }
 
-    // With the badge off there is nothing to signal a pause, so fall back to saying it.
-    if (!isPlaying && !showSmallImage) {
+    // A paused player reports no timestamps at all, so Discord shows the word instead of an
+    // elapsed counter that would otherwise keep climbing while the video is not moving.
+    if (!isPlaying) {
         stateText = if (stateText.isNullOrBlank()) "Paused" else "$stateText \u2022 Paused"
     }
 
@@ -207,24 +254,13 @@ private fun PresenceSnapshot.Player.toPlayerActivity(
         details = details,
         state = stateText,
         // Discord renders a live progress bar when both bounds are present, and counts elapsed
-        // time when only `start` is. A paused player gets neither, so the bar freezes out of
-        // the card instead of racing ahead of the actual playhead.
+        // time when only `start` is. A paused player gets neither.
         timestamps = if (isPlaying) playbackTimestamps() else null,
         assets = DiscordActivityAssets(
             largeImage = posterUrl?.toDiscordImageUrl() ?: NuvioIconUrl,
             largeText = largeText,
-            smallImage = if (showSmallImage) {
-                if (isPlaying) NuvioIconUrl else PausedIconUrl
-            } else {
-                null
-            },
-            smallText = if (showSmallImage) {
-                if (isPlaying) "Playing" else "Paused"
-            } else {
-                null
-            },
         ),
-        buttons = if (showButtons) buildButtons(metaId, metaType) else null,
+        buttons = if (showButtons) buildButtons(metaId) else null,
     )
 }
 
@@ -236,33 +272,22 @@ private fun PresenceSnapshot.Player.playbackTimestamps(): DiscordActivityTimesta
     return DiscordActivityTimestamps(start = start, end = end)
 }
 
-/** Discord allows at most two buttons per activity. */
-private fun buildButtons(metaId: String?, metaType: String?): List<DiscordActivityButton>? {
-    val buttons = mutableListOf<DiscordActivityButton>()
+/** One button only: IMDb for IMDb ids, Kitsu for Kitsu ids. Nothing when the id is unknown. */
+private fun buildButtons(metaId: String?): List<DiscordActivityButton>? {
     val id = metaId?.trim().orEmpty()
-    val externalId = id.substringBefore(':', missingDelimiterValue = id)
-
-    when {
+    return when {
         id.startsWith("tt") && id.length > 2 && id.drop(2).all(Char::isDigit) -> {
-            buttons += DiscordActivityButton("View on IMDb", "https://www.imdb.com/title/$id/")
+            listOf(DiscordActivityButton("View on IMDb", "https://www.imdb.com/title/$id/"))
         }
 
         id.startsWith("kitsu:") -> {
             id.removePrefix("kitsu:").substringBefore(':').takeIf { it.isNotBlank() }?.let { slug ->
-                buttons += DiscordActivityButton("View on Kitsu", "https://kitsu.app/anime/$slug")
+                listOf(DiscordActivityButton("View on Kitsu", "https://kitsu.app/anime/$slug"))
             }
         }
 
-        externalId == "tmdb" -> {
-            id.removePrefix("tmdb:").substringBefore(':').takeIf { it.isNotBlank() }?.let { slug ->
-                val kind = if (metaType == "series") "tv" else "movie"
-                buttons += DiscordActivityButton("View on TMDB", "https://www.themoviedb.org/$kind/$slug")
-            }
-        }
+        else -> null
     }
-
-    buttons += DiscordActivityButton("Get Nuvio", NuvioSiteUrl)
-    return buttons.take(2).takeIf { it.isNotEmpty() }
 }
 
 private fun String.toDiscordImageUrl(): String? {
@@ -272,11 +297,4 @@ private fun String.toDiscordImageUrl(): String? {
     if (withoutScheme.isBlank()) return null
     val encoded = URLEncoder.encode(withoutScheme, StandardCharsets.UTF_8.name()).replace("+", "%20")
     return ImageProxyTemplate.format(encoded)
-}
-
-private fun AppScreenTab.presenceLabel(): String = when (this) {
-    AppScreenTab.Home -> "Home"
-    AppScreenTab.Search -> "Searching"
-    AppScreenTab.Library -> "Library"
-    AppScreenTab.Settings -> "Settings"
 }

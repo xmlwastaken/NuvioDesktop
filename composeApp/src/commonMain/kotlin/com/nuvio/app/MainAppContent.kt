@@ -439,15 +439,24 @@ internal fun MainAppContent(
         }
     }
 
-    LaunchedEffect(selectedTab, navBackStack.lastOrNull()) {
+    val presenceSearchQuery by AppPresenceState.searchQuery.collectAsStateWithLifecycle()
+
+    LaunchedEffect(selectedTab, navBackStack.lastOrNull(), presenceSearchQuery) {
         val topRoute = navBackStack.lastOrNull()
         if (topRoute is PlayerRoute) return@LaunchedEffect
-        val detailTitle = (topRoute as? DetailRoute)?.title
+        val detailRoute = topRoute as? DetailRoute
+        val detailTitle = detailRoute?.title
         AppPresenceState.publish(
             if (!detailTitle.isNullOrBlank()) {
-                PresenceSnapshot.Details(detailTitle)
+                // No poster yet - it is not known until the details screen has loaded its meta.
+                // That screen re-publishes this snapshot with the artwork as soon as it arrives.
+                PresenceSnapshot.Details(
+                    title = detailTitle,
+                    metaId = detailRoute?.id,
+                    metaType = detailRoute?.type,
+                )
             } else {
-                PresenceSnapshot.Tab(selectedTab)
+                PresenceSnapshot.Tab(selectedTab, presenceSearchQuery)
             },
         )
     }
