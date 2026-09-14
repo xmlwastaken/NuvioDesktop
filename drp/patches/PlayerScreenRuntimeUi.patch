@@ -1,0 +1,40 @@
+--- a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt
+@@ -67,16 +67,27 @@
+         } else {
+             null
+         }
+-        AppPresenceState.publish(
+-            PresenceSnapshot.Player(
+-                title = runtime.title,
+-                episodeLabel = episodeLabel,
+-                posterUrl = runtime.poster,
+-                isPlaying = playbackSnapshot.isPlaying,
+-                positionMs = playbackSnapshot.positionMs,
+-                durationMs = playbackSnapshot.durationMs,
+-            ),
+-        )
++        // Re-publish on a timer so the Discord progress bar follows playback and picks up the
++        // catalogue id once it is available. Applied with plain `git apply`, never --3way: if
++        // this hunk stops matching upstream, the build simply carries on without it.
++        while (true) {
++            AppPresenceState.publish(
++                PresenceSnapshot.Player(
++                    title = runtime.title,
++                    episodeLabel = episodeLabel,
++                    posterUrl = runtime.poster,
++                    isPlaying = playbackSnapshot.isPlaying,
++                    positionMs = playbackSnapshot.positionMs,
++                    durationMs = playbackSnapshot.durationMs,
++                    seasonNumber = seasonNumber,
++                    episodeNumber = episodeNumber,
++                    episodeTitle = episodeTitle,
++                    metaId = runtime.parentMetaId,
++                    metaType = runtime.parentMetaType,
++                ),
++            )
++            kotlinx.coroutines.delay(5_000L)
++        }
+     }
+ 
+     val currentGestureFeedback = liveGestureFeedback ?: gestureFeedback

@@ -26,16 +26,16 @@ internal sealed interface PresenceSnapshot {
         val isPlaying: Boolean,
         val positionMs: Long,
         val durationMs: Long,
+        // Everything below is extra detail the player passes along when it knows it. All of it
+        // defaults to null on purpose: if the player stops passing these - it is the file
+        // upstream rewrites most often - the build still compiles and presence still works, the
+        // manager just falls back to reading `episodeLabel` and drops the detail buttons.
         val seasonNumber: Int? = null,
         val episodeNumber: Int? = null,
         val episodeTitle: String? = null,
-        /** Release info as reported by the addon, e.g. `2024` or `2011-2019`. */
-        val year: String? = null,
         /** Stremio-style catalogue id of the parent item, e.g. `tt0944947` or `kitsu:12345`. */
         val metaId: String? = null,
         /** `movie` or `series`. */
         val metaType: String? = null,
-    ) : PresenceSnapshot {
-        val isSeries: Boolean get() = seasonNumber != null && episodeNumber != null
-    }
+    ) : PresenceSnapshot
 }

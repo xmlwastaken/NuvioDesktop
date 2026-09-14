@@ -67,7 +67,7 @@ internal object DiscordPresenceManager {
                         AppPresenceState.current.collect { snapshot ->
                             val activity = snapshot.toDiscordActivity()
                             if (activity == null) {
-                                // Browsing: nothing to show, so clear the card once and idle.
+                                // Not watching anything: clear the card once, then stay quiet.
                                 if (lastActivity == null) return@collect
                             } else if (activity.isEquivalentTo(lastActivity)) {
                                 // The player re-publishes every few seconds; only push real changes.
@@ -109,15 +109,22 @@ private fun PresenceSnapshot?.toDiscordActivity(): DiscordActivity? =
  * Mirrors the card layout stremio-shell-ng produces.
  *
  * Series: name = show title, details = episode title, state = "S3E9".
- * Movie:  name = details = title, state = release year.
+ * Movie:  name = details = title, no state line.
  */
 private fun PresenceSnapshot.Player.buildActivity(): DiscordActivity {
-    val releaseYear = year?.trim()?.takeIf { it.isNotEmpty() }
-    val episode = episodeTitle?.trim()?.takeIf { it.isNotEmpty() }
+    // The player hands over the season/episode numbers directly. If it ever stops doing that -
+    // the player UI is the file upstream rewrites most often - fall back to reading the label
+    // it has always carried, so the card still shows "S3E9" and the episode title.
+    val hasEpisodeNumbers = seasonNumber != null && episodeNumber != null
+    val parsedLabel = if (hasEpisodeNumbers) null else episodeLabel?.parseEpisodeLabel()
 
-    var activityName = title
-    var details = if (isSeries) episode ?: title else title
-    var stateText = if (isSeries) "S${seasonNumber}E${episodeNumber}" else releaseYear
+    val episodeCode = if (hasEpisodeNumbers) "S${seasonNumber}E${episodeNumber}" else parsedLabel?.code
+    val episodeName = episodeTitle?.trim()?.takeIf { it.isNotEmpty() }
+        ?: parsedLabel?.episodeTitle?.takeIf { it.isNotEmpty() }
+
+    // Series put the episode title here; a movie repeats its own title.
+    val details = if (episodeCode != null) episodeName ?: title else title
+    var stateText = episodeCode
 
     // A paused player reports no timestamps at all, so Discord shows the word instead of an
     // elapsed counter that would otherwise keep climbing while the video is not moving.
@@ -125,11 +132,9 @@ private fun PresenceSnapshot.Player.buildActivity(): DiscordActivity {
         stateText = if (stateText.isNullOrBlank()) "Paused" else "$stateText \u2022 Paused"
     }
 
-    val largeText = if (releaseYear != null) "$title ($releaseYear)" else title
-
     return DiscordActivity(
         type = DiscordActivityTypes.WATCHING,
-        name = activityName,
+        name = title,
         details = details,
         state = stateText,
         // start + end draws a live progress bar with the time remaining. A paused player gets
@@ -137,7 +142,7 @@ private fun PresenceSnapshot.Player.buildActivity(): DiscordActivity {
         timestamps = if (isPlaying) playbackTimestamps() else null,
         assets = DiscordActivityAssets(
             largeImage = posterUrl?.toDiscordImageUrl() ?: NuvioIconUrl,
-            largeText = largeText,
+            largeText = title,
         ),
         buttons = buildButtons(metaId),
     )
@@ -150,6 +155,17 @@ private fun PresenceSnapshot.Player.playbackTimestamps(): DiscordActivityTimesta
     // Discord expects Unix seconds, and only draws a progress bar when both bounds are present.
     val endSecs = if (durationMs > position) (nowMs + (durationMs - position)) / 1_000L else null
     return DiscordActivityTimestamps(start = startSecs, end = endSecs)
+}
+
+private data class EpisodeLabel(val code: String, val episodeTitle: String?)
+
+/** Matches the labels the player builds for episodes: `S3E9` and `S3E9 - Episode Title`. */
+private fun String.parseEpisodeLabel(): EpisodeLabel? {
+    val match = Regex("""S(\d+)E(\d+)(?:\s*-\s*(.*))?""").matchEntire(trim()) ?: return null
+    return EpisodeLabel(
+        code = "S${match.groupValues[1]}E${match.groupValues[2]}",
+        episodeTitle = match.groupValues[3].trim().takeIf { it.isNotEmpty() },
+    )
 }
 
 /** One button only: IMDb for IMDb ids, Kitsu for Kitsu ids. Nothing when the id is unknown. */

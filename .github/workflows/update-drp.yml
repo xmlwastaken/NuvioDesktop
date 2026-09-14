@@ -7,10 +7,17 @@ name: Update from upstream and build
 # which upstream never touches. Every run:
 #
 #   1. takes a clean checkout of the LATEST upstream Dev
-#   2. copies the drp/ files over it
-#   3. builds a fresh MSI
+#   2. copies the drp/ files over it (4 files that are ours alone)
+#   3. applies one OPTIONAL patch to the player UI, and skips it if upstream
+#      has moved the code it patches
+#   4. builds a fresh MSI
 #
-# That cannot conflict, and it always builds against current upstream.
+# Step 3 is the part that used to break. The player UI is the file upstream
+# rewrites most often, so shipping a whole frozen copy of it stopped compiling
+# as soon as they touched it. It is now a tiny patch, and if it stops matching
+# the build carries on without it: presence still works, it just loses the
+# IMDb button and the seek-corrected progress bar.
+#
 # Your branch is never rewritten - the work happens on a throwaway branch
 # inside the runner.
 
@@ -47,7 +54,7 @@ jobs:
             echo "::error::No drp/ folder found on branch ${BRANCH}. Add it before running this workflow." >&2
             exit 1
           fi
-          echo "--- files sitting in drp/ (only the ones listed below are used) ---"
+          echo "--- files sitting in drp/ ---"
           ( cd drp && find . -type f | sort )
 
           mkdir -p "${RUNNER_TEMP}/overlay"
@@ -81,7 +88,6 @@ jobs:
           # and break the build.
           for f in \
             "composeApp/src/commonMain/kotlin/com/nuvio/app/core/ui/AppPresenceState.kt" \
-            "composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimeUi.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordActivity.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordIpcClient.kt" \
             "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/discordrpc/DiscordPresenceManager.kt" ; do
@@ -94,8 +100,26 @@ jobs:
             cp "${src}" "${f}"
             echo "  applied  ${f}"
           done
-          echo "all 5 Rich Presence files in place"
+          echo "all 4 Rich Presence files in place"
           git status --short
+
+      - name: Apply the optional player patch (skipped safely if it no longer fits)
+        shell: bash
+        run: |
+          # Plain `git apply` only - no --3way. If the hunk no longer matches, git apply fails
+          # atomically and leaves the file untouched, so upstream's own player code builds as-is.
+          P="drp/patches/PlayerScreenRuntimeUi.patch"
+          if [[ ! -f "$P" ]]; then
+            echo "::warning::No player patch in drp/patches - continuing without the extras."
+            exit 0
+          fi
+          if git apply --ignore-whitespace "$P"; then
+            echo "player patch applied: IMDb button + live progress bar enabled"
+          else
+            echo "::warning::The player patch no longer matches upstream code. Skipping it."
+            echo "::warning::Presence still works - just without the IMDb button, and the"
+            echo "::warning::progress bar will not correct itself after a seek."
+          fi
 
       - name: Read the new version
         id: version
